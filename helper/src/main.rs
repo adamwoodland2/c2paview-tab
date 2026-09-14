@@ -456,8 +456,12 @@ fn ai_rank(label: &str) -> u8 {
     }
 }
 
-fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visited: &mut HashSet<String>) -> ManifestFacts {
+/// `checks`: the set of passed status codes for the manifest being rendered (only known for
+/// the active manifest); `None` for ingredients, whose timestamps/identities we cannot vouch for.
+fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visited: &mut HashSet<String>,
+                   checks: Option<&HashSet<String>>, trust_loaded: bool) -> ManifestFacts {
     let mut facts = ManifestFacts { ai: None };
+    let passed = |code: &str| checks.map(|c| c.contains(code)).unwrap_or(false);
     let manifests = store.get("manifests").unwrap_or(&Value::Null);
     let Some(m) = manifests.get(label) else {
         out.node(depth, false, "Credential details are not available");
@@ -482,8 +486,13 @@ fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visi
         }
         None => out.node(depth, false, "Signed by: (signer name not available)"),
     }
+    // Only a timestamp from a trusted authority is presented as fact (C2PA UX guidance).
     match s(sig, "time") {
-        Some(t) => out.node(depth, false, &format!("Signed on: {}", fmt_time(t))),
+        Some(t) if passed("timeStamp.trusted") => out.node(depth, false, &format!("Signed on: {} (trusted timestamp)", fmt_time(t))),
+        Some(t) if checks.is_none() => out.node(depth, false, &format!("Signed on: {} – as recorded in this ingredient's credential, not independently verified here", fmt_time(t))),
+        Some(t) if !trust_loaded => out.node(depth, false, &format!("Signed on: {} – timestamp not checked against the trust list (trust lists missing)", fmt_time(t))),
+        Some(t) if passed("timeStamp.validated") => out.node(depth, false, &format!("Signed on: {} – timestamp from an authority that is not on the trust list, so not independently verified", fmt_time(t))),
+        Some(t) => out.node(depth, false, &format!("Signed on: {} – timestamp could not be verified", fmt_time(t))),
         None => out.node(depth, false, "Signed on: not recorded – no trusted timestamp, so this credential can no longer be verified once the signing certificate expires"),
     }
     if let Some(cg) = claim_generator(m) { out.node(depth, false, &format!("App used: {cg}")); }
@@ -494,7 +503,8 @@ fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visi
     let assertions = arr(m, "assertions");
     let mut actions: Vec<(String, usize)> = Vec::new();
     let mut ai_best: Option<&'static str> = None;
-    let mut producers: Vec<String> = Vec::new();
+    let mut declared: Vec<String> = Vec::new();   // schema.org author/creator: whatever the creator typed
+    let mut identities: Vec<String> = Vec::new(); // CAWG identity assertion subjects
     let mut others: Vec<String> = Vec::new();
     for a in assertions {
         let lbl = s(a, "label").unwrap_or("");
@@ -518,16 +528,16 @@ fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visi
             }
         } else if lbl.starts_with("stds.schema-org.CreativeWork") {
             for who in arr(data, "author").iter().chain(arr(data, "creator").iter()) {
-                if let Some(n) = s(who, "name") { producers.push(n.to_string()); }
+                if let Some(n) = s(who, "name") { declared.push(n.to_string()); }
             }
-            others.push("Creator and attribution details – entered by the creator".into());
+            others.push("Creator and attribution details – entered by the creator, not verified".into());
         } else if lbl.starts_with("cawg.identity") {
             let mut who = String::new();
             if let Some(n) = data.get("credentialSubject").and_then(|c| s(c, "name")) { who = n.to_string(); }
             if let Some(vc) = data.get("verifiedIdentities").and_then(Value::as_array).and_then(|v| v.first()) {
                 if let Some(n) = s(vc, "name") { who = n.to_string(); }
             }
-            if !who.is_empty() { producers.push(who); }
+            if !who.is_empty() { identities.push(who); }
             others.push("Identity assertion (CAWG) – a named party takes responsibility for this file".into());
         } else if lbl.starts_with("c2pa.training-mining") || lbl.starts_with("cawg.training-mining") {
             others.push("AI training and data-mining preferences – entered by the creator".into());
@@ -546,9 +556,20 @@ fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visi
         }
     }
     facts.ai = ai_best;
-    producers.sort();
-    producers.dedup();
-    if !producers.is_empty() { out.node(depth, false, &format!("Produced by: {}", producers.join(", "))); }
+    declared.sort();
+    declared.dedup();
+    identities.sort();
+    identities.dedup();
+    if !declared.is_empty() {
+        out.node(depth, false, &format!("Producer (as entered by the creator, not verified): {}", declared.join(", ")));
+    }
+    if !identities.is_empty() {
+        // The CAWG identity trust model is not fully implemented upstream, so only a
+        // positively-trusted X.509 credential counts as verified; everything else is labelled as such.
+        let tag = if passed("cawg.x509.credential.trusted") && passed("cawg.x509.signature.validated") { "verified against the trust list" }
+                  else { "not verified" };
+        out.node(depth, false, &format!("Identity (CAWG, {tag}): {}", identities.join(", ")));
+    }
     if let Some(ai) = ai_best { out.node(depth, false, &format!("Source: {ai}")); }
 
     if !actions.is_empty() {
@@ -588,12 +609,12 @@ fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visi
             out.node(depth + 1, false, &format!("{title}{rel}{status}"));
             if let Some(dst) = s(ing, "digital_source_type").and_then(source_type_label) {
                 out.node(depth + 2, false, &format!("Source: {dst}"));
-                if ai_best.map(|b| ai_rank(dst) > ai_rank(b)).unwrap_or(true) { facts.ai = Some(dst); }
+                if facts.ai.map(|b| ai_rank(dst) > ai_rank(b)).unwrap_or(true) { facts.ai = Some(dst); }
             }
             for f in &st.failures { out.node(depth + 2, false, &format!("✗ {}", status_line(f))); }
             if let Some(sub) = sub {
                 if depth / 2 < MAX_INGREDIENT_DEPTH {
-                    let sub_facts = render_manifest(out, store, sub, depth + 2, visited);
+                    let sub_facts = render_manifest(out, store, sub, depth + 2, visited, None, trust_loaded);
                     if let Some(a) = sub_facts.ai {
                         if facts.ai.map(|b| ai_rank(a) > ai_rank(b)).unwrap_or(true) { facts.ai = Some(a); }
                     }
@@ -632,10 +653,14 @@ fn describe(reader: &Reader, trust: &TrustInfo, file: &Path, out: &mut Out) {
     let revoked = hard_failures.iter().any(|f| s(f, "code") == Some("signingCredential.ocsp.revoked"));
 
     // Decide the display state. Mirrors ValidationState but is explicit about *why*.
-    let display = if matches!(state, ValidationState::Invalid) || !hard_failures.is_empty() {
+    // c2pa-rs reports Invalid for ingredient-only failures too; the UX guidance wants those
+    // shown as "incomplete provenance" when the active manifest itself is intact.
+    let display = if !hard_failures.is_empty() {
         "invalid"
     } else if !ing_fail.is_empty() {
         "incomplete"
+    } else if matches!(state, ValidationState::Invalid) {
+        "invalid"
     } else if matches!(state, ValidationState::Trusted) {
         "trusted"
     } else if !trust.loaded {
@@ -650,7 +675,7 @@ fn describe(reader: &Reader, trust: &TrustInfo, file: &Path, out: &mut Out) {
     match display {
         "trusted" => {
             out.head(&format!("Signed by {issuer}"));
-            out.text("This file has Content Credentials. It has not been changed since it was signed, and the signer's certificate is on the trust list published by the C2PA.");
+            out.text("This file has Content Credentials. It has not been changed since it was signed, and the signer's certificate chains to one of the trust lists this tab uses (the C2PA conformance trust list or the interim Content Credentials list).");
         }
         "untrusted" => {
             out.head("The identity of the signer can't be verified");
@@ -679,6 +704,10 @@ fn describe(reader: &Reader, trust: &TrustInfo, file: &Path, out: &mut Out) {
             }
             out.node(0, true, "Problems found");
             for f in &hard_failures { out.node(1, false, &format!("✗ {}", status_line(f))); }
+            for f in &ing_fail { out.node(1, false, &format!("✗ ingredient: {}", status_line(f))); }
+            if hard_failures.is_empty() && ing_fail.is_empty() {
+                out.node(1, false, "The credential structure failed validation (no individual check reported)");
+            }
         }
     }
 
@@ -686,10 +715,14 @@ fn describe(reader: &Reader, trust: &TrustInfo, file: &Path, out: &mut Out) {
     // disclosure as the first node by rendering into a scratch buffer.
     let mut tree = Out { lines: Vec::new(), nodes: 0 };
     let mut visited = HashSet::new();
+    let passed_codes: HashSet<String> = match store.get("validation_results").and_then(|r| r.get("activeManifest")) {
+        Some(am) => arr(am, "success").iter().filter_map(|v| s(v, "code")).map(str::to_string).collect(),
+        None => flat.iter().filter_map(|v| s(v, "code")).filter(|c| is_success_code(c)).map(str::to_string).collect(),
+    };
     let facts = if active.is_empty() {
         ManifestFacts { ai: None }
     } else {
-        render_manifest(&mut tree, &store, &active, 0, &mut visited)
+        render_manifest(&mut tree, &store, &active, 0, &mut visited, Some(&passed_codes), trust.loaded)
     };
     if let Some(ai) = facts.ai {
         out.node(0, false, &format!("AI disclosure: {ai}"));
@@ -727,7 +760,10 @@ fn about_node(out: &mut Out, trust: &TrustInfo, file: Option<&Path>) {
     out.node(0, false, "About this check");
     out.node(1, false, "Checked on this PC by the C2PA reference implementation (c2pa-rs). Nothing was sent over the network.");
     match (&trust.snapshot, trust.loaded) {
-        (Some(d), true) => out.node(1, false, &format!("Trust list snapshot: {d} (C2PA conformance trust list + interim Content Credentials list)")),
+        (Some(d), true) => {
+            out.node(1, false, &format!("Trust list snapshot: {d}"));
+            out.node(2, false, "Sources: the C2PA conformance trust list (+ TSA list) and the interim Content Credentials list from contentcredentials.org. A trusted signer may be on either; this tab does not distinguish which.");
+        }
         (None, true) => out.node(1, false, "Trust list snapshot: date not recorded"),
         (_, false) => out.node(1, false, "Trust lists: not installed – signer identity is not checked"),
     }

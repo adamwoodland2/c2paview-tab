@@ -105,10 +105,44 @@ public static extern void SHChangeNotify(int wEventId, uint uFlags, System.IntPt
 }
 
 function Restart-Explorer {
-    Write-Host 'Restarting Explorer...'
-    Get-Process -Name explorer -ErrorAction SilentlyContinue | Stop-Process -Force
+    # Only this user's Explorer - when elevated on a shared PC, other sessions are left alone.
+    Write-Host 'Restarting Explorer (this account only)...'
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $mine = Get-CimInstance Win32_Process -Filter "Name = 'explorer.exe'" | Where-Object {
+        try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid).Sid -eq $me } catch { $false }
+    }
+    foreach ($p in $mine) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
-    if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
+    if (-not (Get-CimInstance Win32_Process -Filter "Name = 'explorer.exe'" | Where-Object {
+            try { (Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid).Sid -eq $me } catch { $false } })) {
+        Start-Process explorer.exe
+    }
+}
+
+# The files this script ever writes into InstallDir. Uninstall removes these and nothing else.
+$OwnedFiles = @('c2paview.dll', 'c2paview-helper.exe', 'Install-C2paViewTab.ps1', 'Update-TrustLists.ps1')
+$OwnedDirs  = @('trust', 'samples', 'tmp-low')
+
+function Remove-InstalledFiles([string]$dir) {
+    # Refuse to touch a folder that does not look like ours (guards -InstallDir typos).
+    if (-not (Test-Path (Join-Path $dir 'c2paview.dll')) -and -not (Test-Path (Join-Path $dir 'c2paview-helper.exe'))) {
+        throw "$dir does not contain a C2PA View install (no c2paview.dll / c2paview-helper.exe); nothing deleted."
+    }
+    $locked = @()
+    foreach ($f in $OwnedFiles) {
+        $p = Join-Path $dir $f
+        if (Test-Path $p) { try { Remove-Item $p -Force } catch { $locked += $p } }
+    }
+    Get-ChildItem -Path $dir -Filter '*.old-*' -File -ErrorAction SilentlyContinue | ForEach-Object {
+        try { Remove-Item $_.FullName -Force } catch { $locked += $_.FullName }
+    }
+    foreach ($d in $OwnedDirs) {
+        $p = Join-Path $dir $d
+        if (Test-Path $p) { try { Remove-Item $p -Recurse -Force } catch { $locked += $p } }
+    }
+    # Remove the folder itself only if nothing foreign is left in it.
+    if (-not (Get-ChildItem -Path $dir -Force -ErrorAction SilentlyContinue)) { Remove-Item $dir -Force -ErrorAction SilentlyContinue }
+    return $locked
 }
 
 function Remove-StaleFiles([string]$dir) {
@@ -161,17 +195,17 @@ if ($Uninstall) {
     if ($RestartExplorer) { Restart-Explorer }
 
     if (Test-Path $InstallDir) {
-        if ($PSCmdlet.ShouldProcess($InstallDir, 'delete installed files')) {
-            try {
-                Remove-Item -Path $InstallDir -Recurse -Force
-                Write-Host "Removed $InstallDir"
-            } catch {
+        if ($PSCmdlet.ShouldProcess($InstallDir, 'delete the installed C2PA View files')) {
+            $locked = Remove-InstalledFiles $InstallDir
+            if ($locked.Count -eq 0) {
+                Write-Host "Removed the installed files from $InstallDir"
+            } else {
                 $dll = Join-Path $InstallDir 'c2paview.dll'
                 if (Test-Path $dll) {
                     $aside = "$dll.old-$(Get-Date -Format yyyyMMddHHmmss)"
                     try { Move-Item -Path $dll -Destination $aside -Force } catch { }
                 }
-                Write-Warning "Some files are still in use by Explorer and were left in $InstallDir."
+                Write-Warning "Still in use by Explorer, left behind: $($locked -join ', ')"
                 Write-Warning "Run again with -RestartExplorer (or sign out and back in) and re-run -Uninstall to finish."
             }
         }
@@ -204,6 +238,10 @@ Write-Host "  to:   $InstallDir"
 if ($PSCmdlet.ShouldProcess($InstallDir, 'copy files')) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'trust') | Out-Null
+    if ((Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -notin ($OwnedFiles + $OwnedDirs) -and $_.Name -notlike '*.old-*' }).Count -gt 0) {
+        Write-Warning "$InstallDir already contains files that are not part of C2PA View; they will be left alone, but consider a dedicated folder."
+    }
     Remove-StaleFiles $InstallDir
     foreach ($f in @('c2paview.dll', 'c2paview-helper.exe')) {
         Copy-Replacing (Join-Path $binDir $f) (Join-Path $InstallDir $f)

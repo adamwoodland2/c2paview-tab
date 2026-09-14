@@ -50,7 +50,7 @@ rights and the script stops before changing anything and prints the exact comman
 
 | State | Headline | Meaning |
 |---|---|---|
-| trusted | *Signed by NAME* | Intact since signing; the certificate chains to the C2PA trust list. |
+| trusted | *Signed by NAME* | Intact since signing; the certificate chains to one of the bundled trust lists (C2PA conformance list or the interim Content Credentials list - the tab does not say which). |
 | untrusted | *The identity of the signer can't be verified* | Intact since signing, but the signer is not on the trust lists. Judge the name yourself. |
 | incomplete | *These Content Credentials contain incomplete provenance* | The file is intact, but an ingredient's credentials could not be verified. |
 | invalid | *There is a problem with this file's Content Credentials* | Hash or signature mismatch (changed after signing), expired or revoked certificate. Details list every failed check and where it sits. |
@@ -89,7 +89,12 @@ and [Implementation Guidance 2.2](https://spec.c2pa.org/specifications/specifica
   mean *less trustworthy*. Nothing in the UI claims a file is "authentic" or "true".
 - "Content Credentials" is used throughout (not "C2PA") except where the C2PA organisation's
   own trust list is named.
-- Trusted timestamps are shown; their absence is flagged with the certificate-expiry caveat.
+- Only a timestamp that passed `timeStamp.trusted` is shown as a plain "Signed on"; other
+  timestamps are labelled unverified, and absence is flagged with the certificate-expiry caveat.
+  (Known upstream limitation: c2pa-rs may report `timeStamp.trusted` for claim-v1 manifests
+  without a real check - [c2pa-rs#2317](https://github.com/contentauth/c2pa-rs/issues/2317).)
+- Creator names typed into the manifest are labelled "as entered by the creator, not verified";
+  CAWG identities are labelled verified only when the X.509 credential passed trust validation.
 - Remote manifests are never fetched (privacy guidance on soft bindings / remote lookups).
 - All manifest text is character-filtered (control and bidi-override characters removed,
   lengths capped) before display, as the guidance's "code injection" note asks.
@@ -110,7 +115,10 @@ and [Implementation Guidance 2.2](https://spec.c2pa.org/specifications/specifica
   - is inside a **job object** with a 2 GB memory cap, one-process limit, and
     kill-on-close so it dies with Explorer;
   - has a 45 s timeout and a 16 MB output cap; if it crashes, panics or times out the tab
-    says so instead of failing silently.
+    says so instead of failing silently;
+  - inherits exactly two handles (its stdout pipe and NUL) via `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`;
+  - **fails closed**: if the restricted token, job object or handle list cannot be set up, the
+    file is not read at all and the tab reports why. There is no unsandboxed fallback.
 - **Per-user by default.** Everything lives in `%LOCALAPPDATA%\C2PAView` and `HKCU\Software\Classes`;
   nothing system-wide is touched and no admin is needed. `-AllUsers` is the opt-in per-machine
   variant (Program Files + HKLM, elevated). The helper's scratch folder is always the user's

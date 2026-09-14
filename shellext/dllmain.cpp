@@ -242,93 +242,108 @@ static DWORD WINAPI WorkerThread(LPVOID param)
     std::wstring lowTemp = EnsureLowTempDir();
     std::vector<wchar_t> env = BuildEnvBlock(lowTemp.empty() ? dir : lowTemp);
 
-    if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        std::lock_guard<std::mutex> g(job->m);
-        job->failure = L"The helper program c2paview-helper.exe is missing next to c2paview.dll. Reinstall the C2PA View tab.";
-    } else {
-        SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
-        HANDLE hRead = nullptr, hWrite = nullptr;
-        HANDLE hNul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
-        if (hNul == INVALID_HANDLE_VALUE) hNul = nullptr;
-        if (CreatePipe(&hRead, &hWrite, &sa, 0)) {
-            SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+    // Everything below fails CLOSED: if any part of the sandbox cannot be set up, the file
+    // is not read at all and the tab says so. There is no fallback to an unsandboxed launch.
+    std::wstring failure;
+    std::string buf;
+    HANDLE hRead = nullptr, hWrite = nullptr, hNul = nullptr, hTok = nullptr, hJob = nullptr;
+    LPPROC_THREAD_ATTRIBUTE_LIST attrs = nullptr;
+    bool attrsInit = false;
+    PROCESS_INFORMATION pi = {};
+    auto fail = [&](const wchar_t* what) {
+        failure = std::wstring(L"The Content Credentials reader could not be started safely (") + what +
+                  L", error " + std::to_wstring(GetLastError()) + L"), so the file was not read.";
+    };
 
-            STARTUPINFOW si = {};
-            si.cb = sizeof(si);
-            si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-            si.wShowWindow = SW_HIDE;
-            si.hStdInput = hNul;
-            si.hStdOutput = hWrite;
-            si.hStdError = hNul;
-            PROCESS_INFORMATION pi = {};
-            DWORD flags = CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | BELOW_NORMAL_PRIORITY_CLASS;
-
-            HANDLE hTok = MakeLowIntegrityToken();
-            BOOL started = FALSE;
-            if (hTok) {
-                started = CreateProcessAsUserW(hTok, exe.c_str(), &cmd[0], nullptr, nullptr, TRUE, flags, env.data(), dir.c_str(), &si, &pi);
-                CloseHandle(hTok);
-            }
-            if (!started) {
-                // Sandbox token unavailable on this system (unusual): still out-of-process, still job-limited.
-                started = CreateProcessW(exe.c_str(), &cmd[0], nullptr, nullptr, TRUE, flags, env.data(), dir.c_str(), &si, &pi);
-            }
-            CloseHandle(hWrite); hWrite = nullptr;
-
-            if (!started) {
-                std::lock_guard<std::mutex> g(job->m);
-                job->failure = L"The helper program could not be started (error " + std::to_wstring(GetLastError()) + L").";
-            } else {
-                // Memory / process-count limits, and the helper dies with us.
-                HANDLE hJob = CreateJobObjectW(nullptr, nullptr);
-                if (hJob) {
-                    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
-                    jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY |
-                        JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
-                    jeli.BasicLimitInformation.ActiveProcessLimit = 1;
-                    jeli.ProcessMemoryLimit = HELPER_MEMORY_LIMIT;
-                    SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
-                    AssignProcessToJobObject(hJob, pi.hProcess);
-                }
-                bool go = true;
-                {
-                    std::lock_guard<std::mutex> g(job->m);
-                    if (job->cancelled) go = false; else job->hProcess = pi.hProcess;
-                }
-                if (go) ResumeThread(pi.hThread); else TerminateProcess(pi.hProcess, 1);
-                CloseHandle(pi.hThread);
-
-                std::string buf;
-                char chunk[65536];
-                DWORD n = 0;
-                while (ReadFile(hRead, chunk, sizeof(chunk), &n, nullptr) && n > 0) {
-                    if (buf.size() + n > MAX_OUTPUT_BYTES) {
-                        std::lock_guard<std::mutex> g(job->m);
-                        job->overflow = true;
-                        TerminateProcess(pi.hProcess, 1);
-                        break;
-                    }
-                    buf.append(chunk, n);
-                }
-                WaitForSingleObject(pi.hProcess, 5000);
-                {
-                    std::lock_guard<std::mutex> g(job->m);
-                    job->hProcess = nullptr;
-                    job->output.swap(buf);
-                }
-                CloseHandle(pi.hProcess);
-                if (hJob) CloseHandle(hJob);
-            }
-            if (hRead) CloseHandle(hRead);
-        } else {
-            std::lock_guard<std::mutex> g(job->m);
-            job->failure = L"Could not create a pipe to the helper program.";
+    do {
+        if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            failure = L"The helper program c2paview-helper.exe is missing next to c2paview.dll. Reinstall the C2PA View tab.";
+            break;
         }
-        if (hNul) CloseHandle(hNul);
-    }
+        SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+        hNul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+        if (hNul == INVALID_HANDLE_VALUE) { hNul = nullptr; fail(L"NUL device"); break; }
+        if (!CreatePipe(&hRead, &hWrite, &sa, 0)) { fail(L"pipe"); break; }
+        SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+        // The child may inherit exactly these two handles and nothing else of Explorer's.
+        HANDLE inherit[2] = { hWrite, hNul };
+        SIZE_T size = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+        attrs = (LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, size);
+        if (!attrs) { fail(L"attribute list"); break; }
+        if (!InitializeProcThreadAttributeList(attrs, 1, 0, &size)) { fail(L"attribute list"); break; }
+        attrsInit = true;
+        if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit, sizeof(inherit), nullptr, nullptr)) { fail(L"handle list"); break; }
+
+        hTok = MakeLowIntegrityToken();
+        if (!hTok) { fail(L"low-integrity token"); break; }
+
+        hJob = CreateJobObjectW(nullptr, nullptr);
+        if (!hJob) { fail(L"job object"); break; }
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
+        jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY |
+            JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+        jeli.BasicLimitInformation.ActiveProcessLimit = 1;
+        jeli.ProcessMemoryLimit = HELPER_MEMORY_LIMIT;
+        if (!SetInformationJobObject(hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli))) { fail(L"job limits"); break; }
+
+        STARTUPINFOEXW six = {};
+        six.StartupInfo.cb = sizeof(six);
+        six.lpAttributeList = attrs;
+        six.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+        six.StartupInfo.wShowWindow = SW_HIDE;
+        six.StartupInfo.hStdInput = hNul;
+        six.StartupInfo.hStdOutput = hWrite;
+        six.StartupInfo.hStdError = hNul;
+        DWORD flags = CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | BELOW_NORMAL_PRIORITY_CLASS | EXTENDED_STARTUPINFO_PRESENT;
+        if (!CreateProcessAsUserW(hTok, exe.c_str(), &cmd[0], nullptr, nullptr, TRUE, flags, env.data(), dir.c_str(), &six.StartupInfo, &pi)) {
+            fail(L"sandboxed process");
+            break;
+        }
+        CloseHandle(hWrite); hWrite = nullptr;   // the child holds its own copy
+
+        // Limits must be in place before the helper runs a single instruction.
+        if (!AssignProcessToJobObject(hJob, pi.hProcess)) { fail(L"job assignment"); TerminateProcess(pi.hProcess, 1); break; }
+        bool go = true;
+        {
+            std::lock_guard<std::mutex> g(job->m);
+            if (job->cancelled) go = false; else job->hProcess = pi.hProcess;
+        }
+        if (!go) { TerminateProcess(pi.hProcess, 1); break; }
+        ResumeThread(pi.hThread);
+
+        char chunk[65536];
+        DWORD n = 0;
+        while (ReadFile(hRead, chunk, sizeof(chunk), &n, nullptr) && n > 0) {
+            if (buf.size() + n > MAX_OUTPUT_BYTES) {
+                std::lock_guard<std::mutex> g(job->m);
+                job->overflow = true;
+                TerminateProcess(pi.hProcess, 1);
+                break;
+            }
+            buf.append(chunk, n);
+        }
+        WaitForSingleObject(pi.hProcess, 5000);
+    } while (false);
 
     {
         std::lock_guard<std::mutex> g(job->m);
+        job->hProcess = nullptr;          // never let Terminate() touch a handle we are about to close
+    }
+    if (pi.hThread) CloseHandle(pi.hThread);
+    if (pi.hProcess) CloseHandle(pi.hProcess);
+    if (hJob) CloseHandle(hJob);          // KILL_ON_JOB_CLOSE: nothing outlives this
+    if (hTok) CloseHandle(hTok);
+    if (attrs) { if (attrsInit) DeleteProcThreadAttributeList(attrs); HeapFree(GetProcessHeap(), 0, attrs); }
+    if (hWrite) CloseHandle(hWrite);
+    if (hRead) CloseHandle(hRead);
+    if (hNul) CloseHandle(hNul);
+
+    {
+        std::lock_guard<std::mutex> g(job->m);
+        job->output.swap(buf);
+        job->failure = failure;
         if (!job->cancelled && job->hwnd) PostMessageW(job->hwnd, WM_APP_RESULT, 0, 0);
     }
     job.reset();
@@ -357,8 +372,11 @@ static void SetClipboardText(HWND hwnd, const std::wstring& text)
     HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
     if (h) {
         void* p = GlobalLock(h);
-        if (p) { memcpy(p, text.c_str(), bytes); GlobalUnlock(h); SetClipboardData(CF_UNICODETEXT, h); }
-        else GlobalFree(h);
+        if (p) {
+            memcpy(p, text.c_str(), bytes);
+            GlobalUnlock(h);
+            if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);   // ownership passes only on success
+        } else GlobalFree(h);
     }
     CloseClipboard();
 }
@@ -607,8 +625,8 @@ public:
         STGMEDIUM stg = {};
         if (FAILED(pdtobj->GetData(&fe, &stg))) return E_FAIL;
         HRESULT hr = E_FAIL;
-        HDROP hDrop = (HDROP)GlobalLock(stg.hGlobal);
-        if (hDrop) {
+        HDROP hDrop = (HDROP)stg.hGlobal;      // DragQueryFile locks/unlocks the HGLOBAL itself
+        if (stg.tymed == TYMED_HGLOBAL && hDrop) {
             if (DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0) == 1) {
                 UINT len = DragQueryFileW(hDrop, 0, nullptr, 0);
                 if (len > 0) {
@@ -623,7 +641,6 @@ public:
                     }
                 }
             }
-            GlobalUnlock(stg.hGlobal);
         }
         ReleaseStgMedium(&stg);
         return hr;

@@ -6,8 +6,8 @@
     This is the ONLY part of C2PA View that uses the network, and only when you run it.
     It downloads the C2PA Conformance Program trust lists and the interim Content
     Credentials (CAI) lists, validates them, and replaces the copies in the trust folder
-    atomically. A VERSION.txt records the date and sources; the tab shows that date under
-    "About this check".
+    only if every one of them downloaded and validated - otherwise nothing changes. A
+    VERSION.txt records the date and sources; the tab shows that date under "About this check".
 
 .PARAMETER TrustDir
     Folder to update. Default: %LOCALAPPDATA%\C2PAView\trust if installed, else .\trust
@@ -62,19 +62,31 @@ try {
         }
     }
 
-    $downloaded = Get-ChildItem -Path $tmp -File
-    if (-not $downloaded) { throw 'Nothing was downloaded; trust lists unchanged.' }
+    $downloaded = @(Get-ChildItem -Path $tmp -File)
+    if (-not $ok -or $downloaded.Count -ne $Sources.Count) {
+        throw "Not every list could be downloaded and validated ($($downloaded.Count) of $($Sources.Count)). Nothing was changed - the existing snapshot is untouched."
+    }
 
-    if ($PSCmdlet.ShouldProcess($TrustDir, "replace $($downloaded.Count) trust list file(s)")) {
-        foreach ($f in $downloaded) {
-            Move-Item -Path $f.FullName -Destination (Join-Path $TrustDir $f.Name) -Force
-        }
+    # All-or-nothing: swap the complete set in, then stamp the date that describes it.
+    if ($PSCmdlet.ShouldProcess($TrustDir, "replace all $($Sources.Count) trust list files")) {
         $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
         $lines = @($stamp, "# Trust list snapshot fetched $stamp UTC by Update-TrustLists.ps1", "# Sources:")
         $lines += $Sources | ForEach-Object { "#   $($_.File) <- $($_.Url)" }
-        Set-Content -Path (Join-Path $TrustDir 'VERSION.txt') -Value $lines -Encoding UTF8
+        Set-Content -Path (Join-Path $tmp 'VERSION.txt') -Value $lines -Encoding UTF8
+        $backup = "$TrustDir.previous"
+        if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
+        Copy-Item -Path $TrustDir -Destination $backup -Recurse -Force
+        try {
+            foreach ($f in @(Get-ChildItem -Path $tmp -File)) {
+                Move-Item -Path $f.FullName -Destination (Join-Path $TrustDir $f.Name) -Force
+            }
+            Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
+        } catch {
+            Copy-Item -Path (Join-Path $backup '*') -Destination $TrustDir -Force
+            Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
+            throw "Replacing the trust lists failed part-way; the previous snapshot was restored. $($_.Exception.Message)"
+        }
         Write-Host "Trust lists updated in $TrustDir ($stamp)."
-        if (-not $ok) { Write-Warning 'One or more lists could not be refreshed; the previous copies of those were kept.' }
     }
 } finally {
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
