@@ -196,7 +196,7 @@ if ($Uninstall) {
 
     if (Test-Path $InstallDir) {
         if ($PSCmdlet.ShouldProcess($InstallDir, 'delete the installed C2PA View files')) {
-            $locked = Remove-InstalledFiles $InstallDir
+            $locked = @(Remove-InstalledFiles $InstallDir)
             if ($locked.Count -eq 0) {
                 Write-Host "Removed the installed files from $InstallDir"
             } else {
