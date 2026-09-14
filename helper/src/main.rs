@@ -11,7 +11,7 @@
 //! Output protocol (UTF-8, one record per line, fields separated by TAB):
 //!   V     <protocol version>
 //!   META  <key> <value>                 diagnostics (helper version, timings, trust snapshot)
-//!   STATE <trusted|untrusted|unverified|incomplete|invalid|malformed|remote|none|unsupported|error>
+//!   STATE <trusted|untrusted|unverified|incomplete|invalid|malformed|unreadable|remote|none|unsupported|error>
 //!   HEAD  <headline>                    one line, the L2 "status" summary
 //!   TEXT  <paragraph>                   zero or more explanatory lines
 //!   NODE  <depth> <x|-> <text>          tree items; 'x' = expanded by default
@@ -838,8 +838,15 @@ fn run(o: &Opts) -> String {
             about_node(&mut out, &trust, None);
         }
         Err(e) => {
-            simple_state(&mut out, "malformed", "There is a problem with this file's Content Credentials and they can't be viewed",
-                "The file contains Content Credentials data that is damaged or not well-formed, so nothing in it can be verified or shown.", Some(e.to_string()));
+            let msg = e.to_string();
+            if msg.starts_with("asset could not be parsed") || msg.contains("could not be parsed") {
+                // The container itself is damaged or mislabelled: not a Content Credentials problem.
+                simple_state(&mut out, "unreadable", "Content Credentials can't be read from this file",
+                    "The file could not be read as the format its extension claims - it may be damaged or mislabelled - so it is unknown whether it carries Content Credentials.", Some(msg));
+            } else {
+                simple_state(&mut out, "malformed", "There is a problem with this file's Content Credentials and they can't be viewed",
+                    "The file contains Content Credentials data that is damaged or not well-formed, so nothing in it can be verified or shown.", Some(msg));
+            }
             about_node(&mut out, &trust, Some(&o.file));
         }
     }
@@ -936,9 +943,9 @@ mod tests {
         const PNG: &[u8] = &[
             0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
             0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x00, 0x02, 0x00,
-            0x00, 0x05, 0x00, 0x01, 0xE2, 0x26, 0x05, 0x9B, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
-            0xAE, 0x42, 0x60, 0x82,
+            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x60, 0x60, 0x60,
+            0x00, 0x00, 0x00, 0x05, 0x00, 0x01, 0xA5, 0xF6, 0x45, 0x40, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+            0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ];
         let dir = std::env::temp_dir().join(format!("c2paview-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();

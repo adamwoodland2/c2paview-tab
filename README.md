@@ -43,7 +43,7 @@ installer picks the right binaries.
 | malformed | *…and they can't be viewed* | The credential data is damaged or not well-formed. |
 | none | *No Content Credentials* | Most files. Explicitly **not** evidence of anything either way. If traces of stripped credentials remain (XMP pointers, JUMBF fragments) they are listed. |
 | remote | *…stored online, not in this file* | The file points to a remote manifest. Not fetched, by design. |
-| unsupported / error | | Wrong file type for its extension, unreadable file, or the helper timed out / crashed. |
+| unreadable / unsupported / error | | Damaged or mislabelled file that can't be parsed as its format, a file type Content Credentials can't live in, or the helper timed out / crashed. Never presented as a credentials problem. |
 
 Below the headline: an **AI disclosure** line when the manifest declares a digital source
 type ("Fully generated with AI", "Partially edited using AI", "Captured by a camera..."),

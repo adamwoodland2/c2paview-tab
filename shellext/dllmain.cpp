@@ -7,8 +7,12 @@
 //
 // Registration is done by scripts/Install-C2paViewTab.ps1 (per-user, HKCU), not here.
 
+#ifndef UNICODE
 #define UNICODE
+#endif
+#ifndef _UNICODE
 #define _UNICODE
+#endif
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -399,7 +403,7 @@ static void ShowModel(HWND hwnd, PageState& st)
     else if (m.state == L"trusted") st.headColor = RGB(0x1B, 0x5E, 0x20);
     else st.headColor = GetSysColor(COLOR_GRAYTEXT);
 
-    ShowWindow(GetDlgItem(hwnd, IDC_ICON), present ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(hwnd, IDC_CRICON), present ? SW_SHOW : SW_HIDE);
     SetDlgItemTextW(hwnd, IDC_HEAD, m.head.c_str());
     SetDlgItemTextW(hwnd, IDC_TEXT, m.text.c_str());
     SetDlgItemTextW(hwnd, IDC_FOOT, L"Checked offline");
@@ -469,7 +473,7 @@ static void OnInitDialog(HWND hwnd, PageState* st)
     }
 
     // Icon at the control's real pixel size for the current DPI.
-    HWND hIconCtl = GetDlgItem(hwnd, IDC_ICON);
+    HWND hIconCtl = GetDlgItem(hwnd, IDC_CRICON);
     RECT rc = {};
     GetClientRect(hIconCtl, &rc);
     int cx = rc.right > 0 ? rc.right : 32, cy = rc.bottom > 0 ? rc.bottom : 32;
@@ -568,7 +572,7 @@ class CPropSheetExt : public IShellExtInit, public IShellPropSheetExt
     std::wstring m_file;
 public:
     CPropSheetExt() { ++g_cObj; }
-    ~CPropSheetExt() { --g_cObj; }
+    virtual ~CPropSheetExt() { --g_cObj; }
 
     // IUnknown
     IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv) override
@@ -641,7 +645,7 @@ public:
         if (!pfnAddPage(hPage, lParam)) { DestroyPropertySheetPage(hPage); return E_FAIL; }   // callback frees st
         return S_OK;
     }
-    IFACEMETHODIMP ReplacePage(EXPROPSHEETPAGEID, LPFNSVADDPROPSHEETPAGE, LPARAM) override { return E_NOTIMPL; }
+    IFACEMETHODIMP ReplacePage(UINT, LPFNSVADDPROPSHEETPAGE, LPARAM) override { return E_NOTIMPL; }
 
     // The page owns its PageState; it is freed on WM_DESTROY, or here if the page never got created.
     static UINT CALLBACK PageCallback(HWND, UINT uMsg, LPPROPSHEETPAGEW ppsp)
@@ -662,7 +666,7 @@ class CClassFactory : public IClassFactory
     std::atomic<long> m_ref{ 1 };
 public:
     CClassFactory() { ++g_cObj; }
-    ~CClassFactory() { --g_cObj; }
+    virtual ~CClassFactory() { --g_cObj; }
     IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv) override
     {
         if (!ppv) return E_POINTER;

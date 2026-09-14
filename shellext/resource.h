@@ -3,7 +3,7 @@
 #define IDI_CR            101
 #define IDD_PAGE          200
 
-#define IDC_ICON          1001
+#define IDC_CRICON          1001
 #define IDC_HEAD          1002
 #define IDC_TEXT          1003
 #define IDC_TREE          1004
