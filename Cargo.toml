@@ -1,0 +1,12 @@
+[workspace]
+members = ["helper"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+# Keep unwinding so a panic inside the reader is caught and reported as an
+# "error" state instead of an abort (the shell extension shows a message either way).
+panic = "unwind"

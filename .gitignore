@@ -1,0 +1,24 @@
+# Rust
+/target/
+/helper/target/
+Cargo.lock.bak
+
+# MSVC build output
+/build/
+/dist/
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.old
+
+# Editors / OS
+.vs/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini

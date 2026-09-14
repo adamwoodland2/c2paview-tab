@@ -1,0 +1,18 @@
+[package]
+name = "c2paview-helper"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "MIT"
+publish = false
+description = "Reads and validates C2PA Content Credentials for the C2PA View Explorer property tab (out-of-process helper)."
+
+[[bin]]
+name = "c2paview-helper"
+path = "src/main.rs"
+
+[dependencies]
+# The C2PA reference implementation. Pure-Rust crypto, no OpenSSL, and no HTTP
+# client compiled in: the helper never touches the network.
+c2pa = { version = "0.90", default-features = false, features = ["rust_native_crypto", "file_io", "pdf"] }
+serde_json = "1"

@@ -1,0 +1,122 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            triple: x86_64-pc-windows-msvc
+            msvc: x64
+          - arch: arm64
+            triple: aarch64-pc-windows-msvc
+            msvc: amd64_arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: MSVC developer environment (${{ matrix.msvc }})
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc }}
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
+
+      - name: Test helper
+        if: matrix.arch == 'x64'
+        run: cargo test --release --target ${{ matrix.triple }} -p c2paview-helper -- --nocapture
+
+      - name: Build helper
+        run: cargo build --release --target ${{ matrix.triple }} -p c2paview-helper
+
+      - name: Build shell extension
+        shell: pwsh
+        run: ./shellext/build.ps1 -Arch ${{ matrix.arch }}
+
+      - name: Smoke-test helper against the sample
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $exe = "target/${{ matrix.triple }}/release/c2paview-helper.exe"
+          $out = & $exe --trust-dir trust -- samples/signed.jpg
+          $out | Out-String | Write-Host
+          if (-not ($out -contains "STATE`tuntrusted")) { throw "expected STATE untrusted for the test-certificate sample" }
+          if (-not ($out -contains "END")) { throw "helper output not terminated" }
+          $none = & $exe --trust-dir trust -- README.md
+          if (-not ($none -contains "STATE`tunsupported") -and -not ($none -contains "STATE`tnone")) { $none | Out-String | Write-Host; throw "expected unsupported/none for README.md" }
+          Write-Host "Exports of c2paview.dll:"
+          dumpbin /nologo /exports build/${{ matrix.arch }}/c2paview.dll
+
+      - name: Stage binaries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path stage/bin/${{ matrix.arch }} | Out-Null
+          Copy-Item build/${{ matrix.arch }}/c2paview.dll stage/bin/${{ matrix.arch }}/
+          Copy-Item target/${{ matrix.triple }}/release/c2paview-helper.exe stage/bin/${{ matrix.arch }}/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.arch }}
+          path: stage/bin
+          if-no-files-found: error
+
+  package:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: stage/bin
+          merge-multiple: true
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse stage | Select-Object FullName | Out-String | Write-Host
+          ./scripts/Package.ps1 -BinDir stage/bin -OutDir dist
+
+      - name: Dry-run the installer (-WhatIf) from the packaged layout
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem dist -Directory | Select-Object -First 1
+          & "$($pkg.FullName)\Install-C2paViewTab.ps1" -WhatIf
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c2paview-tab
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          generate_release_notes: true

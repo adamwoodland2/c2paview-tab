@@ -1,0 +1,9 @@
+2026-09-02
+# Trust list snapshot. First line is the date shown in the tab under "About this check".
+# Same snapshot as https://c2paview.com/ (copied from that site's trust/ folder, taken 2026-09-02).
+# Refresh with Update-TrustLists.ps1. Sources:
+#   c2pa-trust-list.pem        <- https://raw.githubusercontent.com/c2pa-org/conformance-public/main/trust-list/C2PA-TRUST-LIST.pem
+#   c2pa-tsa-trust-list.pem    <- https://raw.githubusercontent.com/c2pa-org/conformance-public/main/trust-list/C2PA-TSA-TRUST-LIST.pem
+#   interim-anchors.pem        <- https://contentcredentials.org/trust/anchors.pem
+#   interim-allowed.sha256.txt <- https://contentcredentials.org/trust/allowed.sha256.txt
+#   store.cfg                  <- https://contentcredentials.org/trust/store.cfg

@@ -1,0 +1,4 @@
+LIBRARY c2paview
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE
