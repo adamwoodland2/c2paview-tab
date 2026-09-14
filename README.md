@@ -8,7 +8,7 @@ since it was signed.
 Same idea as [c2paview.com](https://c2paview.com/), built into Explorer. 100% offline:
 nothing about your files ever leaves the PC.
 
-![Content Credentials icon](assets/cr-64.png)
+![The Content Credentials tab on the bundled sample file](assets/screenshot.png)
 
 ## Install (per user, no admin)
 

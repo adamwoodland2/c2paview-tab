@@ -27,6 +27,7 @@ $name  = "c2paview-tab-$Version"
 $stage = Join-Path $OutDir $name
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
+$stage = (Resolve-Path $stage).Path
 
 $archs = Get-ChildItem -Path $BinDir -Directory | Where-Object { $_.Name -in @('x64', 'arm64') }
 if (-not $archs) { throw "No x64\ or arm64\ folder under $BinDir" }
