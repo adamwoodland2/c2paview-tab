@@ -238,8 +238,9 @@ Write-Host "  to:   $InstallDir"
 if ($PSCmdlet.ShouldProcess($InstallDir, 'copy files')) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir 'trust') | Out-Null
-    if ((Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -notin ($OwnedFiles + $OwnedDirs) -and $_.Name -notlike '*.old-*' }).Count -gt 0) {
+    $foreign = @(Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -notin ($OwnedFiles + $OwnedDirs) -and $_.Name -notlike '*.old-*' })
+    if ($foreign.Count -gt 0) {
         Write-Warning "$InstallDir already contains files that are not part of C2PA View; they will be left alone, but consider a dedicated folder."
     }
     Remove-StaleFiles $InstallDir

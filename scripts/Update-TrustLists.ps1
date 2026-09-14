@@ -72,7 +72,7 @@ try {
         $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
         $lines = @($stamp, "# Trust list snapshot fetched $stamp UTC by Update-TrustLists.ps1", "# Sources:")
         $lines += $Sources | ForEach-Object { "#   $($_.File) <- $($_.Url)" }
-        Set-Content -Path (Join-Path $tmp 'VERSION.txt') -Value $lines -Encoding UTF8
+        [IO.File]::WriteAllLines((Join-Path $tmp 'VERSION.txt'), [string[]]$lines, (New-Object System.Text.UTF8Encoding $false))   # no BOM
         $backup = "$TrustDir.previous"
         if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
         Copy-Item -Path $TrustDir -Destination $backup -Recurse -Force
