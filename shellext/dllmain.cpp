@@ -20,6 +20,7 @@
 #include <uxtheme.h>
 #include <sddl.h>
 #include <aclapi.h>
+#include <cstdlib>
 #include <new>
 #include <string>
 #include <vector>

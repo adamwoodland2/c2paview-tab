@@ -1,6 +1,13 @@
 #include <windows.h>
-#include <commctrl.h>
 #include "resource.h"
+
+// TreeView styles (commctrl.h values), spelled out so the .rc has no dependency on it.
+#define TVS_HASBUTTONS      0x0001
+#define TVS_HASLINES        0x0002
+#define TVS_LINESATROOT     0x0004
+#define TVS_DISABLEDRAGDROP 0x0010
+#define TVS_SHOWSELALWAYS   0x0020
+#define TVS_INFOTIP         0x0800
 
 // The official Content Credentials icon (C2PA trademark, used unaltered - see assets/ICON-SOURCE.md).
 IDI_CR ICON "..\\assets\\cr.ico"
@@ -15,7 +22,7 @@ BEGIN
     ICON            IDI_CR, IDC_ICON, 7, 7, 21, 20, SS_ICON | SS_REALSIZECONTROL
     LTEXT           "", IDC_HEAD, 33, 8, 187, 20, SS_NOPREFIX | SS_EDITCONTROL
     LTEXT           "", IDC_TEXT, 7, 32, 213, 40, SS_NOPREFIX | SS_EDITCONTROL
-    CONTROL         "", IDC_TREE, WC_TREEVIEW, WS_TABSTOP | WS_BORDER | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_INFOTIP | TVS_DISABLEDRAGDROP, 7, 75, 213, 115
+    CONTROL         "", IDC_TREE, "SysTreeView32", WS_TABSTOP | WS_BORDER | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_INFOTIP | TVS_DISABLEDRAGDROP, 7, 75, 213, 115
     PUSHBUTTON      "Copy &details", IDC_COPY_TEXT, 7, 195, 62, 14
     PUSHBUTTON      "Copy manifest &JSON", IDC_COPY_JSON, 73, 195, 84, 14
     RTEXT           "", IDC_FOOT, 160, 198, 60, 8, SS_NOPREFIX

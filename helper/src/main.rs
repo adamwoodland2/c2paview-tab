@@ -50,7 +50,7 @@ fn parse_args() -> Result<Opts, String> {
     let mut args = std::env::args_os().skip(1);
     let mut only_positional = false;
     while let Some(a) = args.next() {
-        let s = a.to_string_lossy();
+        let s = a.to_string_lossy().into_owned();
         if !only_positional && s == "--" {
             only_positional = true;
         } else if !only_positional && s == "--trust-dir" {
@@ -169,13 +169,12 @@ fn load_trust(dir: Option<&Path>) -> TrustInfo {
         snapshot = read_text(d, "VERSION.txt").map(|s| s.lines().next().unwrap_or("").trim().to_string());
     }
     let loaded = !anchors.is_empty() || allowed.is_some();
-    let mut verify = serde_json::json!({
+    let verify = serde_json::json!({
         "verify_after_reading": true,
         "verify_trust": loaded,
         "ocsp_fetch": false,
         "remote_manifest_fetch": false
     });
-    let _ = &mut verify;
     let mut settings = serde_json::json!({ "verify": verify });
     if loaded {
         let mut trust = serde_json::Map::new();
@@ -446,7 +445,6 @@ fn claim_generator(m: &Value) -> Option<String> {
 
 struct ManifestFacts {
     ai: Option<&'static str>,
-    ai_certain: bool,
 }
 
 /// Rank AI disclosures so a fully-generated ingredient does not get lost among edits.
@@ -458,8 +456,8 @@ fn ai_rank(label: &str) -> u8 {
     }
 }
 
-fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visited: &mut HashSet<String>, trust_loaded: bool) -> ManifestFacts {
-    let mut facts = ManifestFacts { ai: None, ai_certain: false };
+fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visited: &mut HashSet<String>) -> ManifestFacts {
+    let mut facts = ManifestFacts { ai: None };
     let manifests = store.get("manifests").unwrap_or(&Value::Null);
     let Some(m) = manifests.get(label) else {
         out.node(depth, false, "Credential details are not available");
@@ -548,7 +546,6 @@ fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visi
         }
     }
     facts.ai = ai_best;
-    facts.ai_certain = ai_best.is_some();
     producers.sort();
     producers.dedup();
     if !producers.is_empty() { out.node(depth, false, &format!("Produced by: {}", producers.join(", "))); }
@@ -596,7 +593,7 @@ fn render_manifest(out: &mut Out, store: &Value, label: &str, depth: usize, visi
             for f in &st.failures { out.node(depth + 2, false, &format!("✗ {}", status_line(f))); }
             if let Some(sub) = sub {
                 if depth / 2 < MAX_INGREDIENT_DEPTH {
-                    let sub_facts = render_manifest(out, store, sub, depth + 2, visited, trust_loaded);
+                    let sub_facts = render_manifest(out, store, sub, depth + 2, visited);
                     if let Some(a) = sub_facts.ai {
                         if facts.ai.map(|b| ai_rank(a) > ai_rank(b)).unwrap_or(true) { facts.ai = Some(a); }
                     }
@@ -690,14 +687,13 @@ fn describe(reader: &Reader, trust: &TrustInfo, file: &Path, out: &mut Out) {
     let mut tree = Out { lines: Vec::new(), nodes: 0 };
     let mut visited = HashSet::new();
     let facts = if active.is_empty() {
-        ManifestFacts { ai: None, ai_certain: false }
+        ManifestFacts { ai: None }
     } else {
-        render_manifest(&mut tree, &store, &active, 0, &mut visited, trust.loaded)
+        render_manifest(&mut tree, &store, &active, 0, &mut visited)
     };
     if let Some(ai) = facts.ai {
         out.node(0, false, &format!("AI disclosure: {ai}"));
     }
-    let _ = facts.ai_certain;
     out.lines.extend(tree.lines);
     out.nodes += tree.nodes;
 
@@ -784,7 +780,7 @@ fn debris_scan(file: &Path) -> Vec<String> {
     traces
 }
 
-fn simple_state(out: &mut Out, state: &str, head: &str, text: &str, detail: Option<&str>) {
+fn simple_state(out: &mut Out, state: &str, head: &str, text: &str, detail: Option<String>) {
     out.state(state);
     out.head(head);
     out.text(text);
@@ -802,12 +798,19 @@ fn run(o: &Opts) -> String {
         Ok(c) => c,
         Err(e) => {
             simple_state(&mut out, "error", "Content Credentials couldn't be checked",
-                "The verifier could not be configured. Reinstalling the C2PA View tab should fix this.", Some(&e.to_string()));
+                "The verifier could not be configured. Reinstalling the C2PA View tab should fix this.", Some(e.to_string()));
             about_node(&mut out, &trust, None);
             return out.finish();
         }
     };
 
+    if let Err(e) = fs::metadata(&o.file) {
+        if o.json { return format!("{}
+", serde_json::json!({ "error": e.to_string() })); }
+        simple_state(&mut out, "error", "Content Credentials couldn't be checked", "The file could not be opened.", Some(e.to_string()));
+        about_node(&mut out, &trust, None);
+        return out.finish();
+    }
     let result = Reader::from_context(ctx).with_file(&o.file);
     if o.json {
         return match &result {
@@ -831,12 +834,12 @@ fn run(o: &Opts) -> String {
         }
         Err(c2pa::Error::IoError(e)) => {
             simple_state(&mut out, "error", "Content Credentials couldn't be checked",
-                "The file could not be read.", Some(&e.to_string()));
+                "The file could not be read.", Some(e.to_string()));
             about_node(&mut out, &trust, None);
         }
         Err(e) => {
             simple_state(&mut out, "malformed", "There is a problem with this file's Content Credentials and they can't be viewed",
-                "The file contains Content Credentials data that is damaged or not well-formed, so nothing in it can be verified or shown.", Some(&e.to_string()));
+                "The file contains Content Credentials data that is damaged or not well-formed, so nothing in it can be verified or shown.", Some(e.to_string()));
             about_node(&mut out, &trust, Some(&o.file));
         }
     }
