@@ -3,22 +3,30 @@
     Adds (or removes) the "Content Credentials" tab in Explorer's file Properties dialog.
 
 .DESCRIPTION
-    Per-user install: copies c2paview.dll, c2paview-helper.exe and the trust lists to
-    %LOCALAPPDATA%\C2PAView and registers the property-sheet handler under HKCU only.
+    Default (per-user) install: copies c2paview.dll, c2paview-helper.exe and the trust lists
+    to %LOCALAPPDATA%\C2PAView and registers the property-sheet handler under HKCU only.
     No administrator rights, no UAC prompt, no changes for other accounts on the PC.
+
+    With -AllUsers: installs to %ProgramFiles%\C2PAView, registers under HKLM for every
+    account, and adds the handler to the "Approved" shell-extensions list (so it also works
+    where the EnforceShellExtensionSecurity policy is on). Needs an elevated PowerShell.
 
     Nothing here contacts the network. (Update-TrustLists.ps1 is the only script that does,
     and only when you run it.)
 
 .PARAMETER Uninstall
-    Remove the registration and the installed files.
+    Remove the registration and the installed files (combine with -AllUsers to remove a
+    per-machine install).
+
+.PARAMETER AllUsers
+    Per-machine install/uninstall (HKLM + Program Files). Requires administrator rights.
 
 .PARAMETER RestartExplorer
     Restart explorer.exe afterwards. Not required for install (the tab appears on the next
     Properties dialog), but needed to release the DLL when uninstalling or upgrading.
 
 .PARAMETER InstallDir
-    Where to install. Default: %LOCALAPPDATA%\C2PAView
+    Where to install. Default: %LOCALAPPDATA%\C2PAView, or %ProgramFiles%\C2PAView with -AllUsers.
 
 .PARAMETER SourceDir
     Folder containing bin\<arch>\ and trust\. Default: the folder this script is in, or its parent.
@@ -26,16 +34,43 @@
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\Install-C2paViewTab.ps1
     powershell -ExecutionPolicy Bypass -File .\Install-C2paViewTab.ps1 -Uninstall -RestartExplorer
+    # from an elevated PowerShell:
+    powershell -ExecutionPolicy Bypass -File .\Install-C2paViewTab.ps1 -AllUsers
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [switch]$Uninstall,
+    [switch]$AllUsers,
     [switch]$RestartExplorer,
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'C2PAView'),
+    [string]$InstallDir,
     [string]$SourceDir
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# --- scope ----------------------------------------------------------------------------
+
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($AllUsers -and -not $isAdmin) {
+    $elevArgs = @('-ExecutionPolicy', 'Bypass', '-File', "`"$($MyInvocation.MyCommand.Path)`"", '-AllUsers')
+    if ($Uninstall)       { $elevArgs += '-Uninstall' }
+    if ($RestartExplorer) { $elevArgs += '-RestartExplorer' }
+    if ($InstallDir)      { $elevArgs += @('-InstallDir', "`"$InstallDir`"") }
+    Write-Host ''
+    Write-Host '-AllUsers installs for every account on this PC (HKLM + Program Files), which needs administrator rights,' -ForegroundColor Yellow
+    Write-Host 'and this PowerShell window is not elevated. Nothing has been changed.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host 'Either open PowerShell with "Run as administrator" and run the same command, or paste this to elevate now:'
+    Write-Host "  Start-Process powershell -Verb RunAs -ArgumentList '$($elevArgs -join ' ')'" -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host 'Or drop -AllUsers to install just for your own account (no admin needed).'
+    exit 1
+}
+if (-not $InstallDir) {
+    $InstallDir = if ($AllUsers) { Join-Path $env:ProgramFiles 'C2PAView' } else { Join-Path $env:LOCALAPPDATA 'C2PAView' }
+}
+$ScopeName = if ($AllUsers) { 'all users' } else { 'the current user' }
 
 $Clsid       = '{5E9746CC-4EDB-460C-AA85-D2718CABC7FC}'
 $HandlerName = 'C2PAView'
@@ -43,7 +78,8 @@ $Description = 'C2PA View - Content Credentials property sheet'
 # Same set as c2paview.com: the formats the C2PA specification defines embeddings for.
 $Extensions  = @('.jpg', '.jpeg', '.jpe', '.jfif', '.png', '.webp', '.avif', '.gif', '.tif', '.tiff', '.svg',
                  '.mp4', '.mov', '.mp3', '.wav', '.pdf', '.c2pa')
-$ClassesRoot = 'HKCU:\Software\Classes'
+$ClassesRoot = if ($AllUsers) { 'HKLM:\Software\Classes' } else { 'HKCU:\Software\Classes' }
+$ApprovedKey = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved'
 
 # --- helpers -------------------------------------------------------------------------
 
@@ -96,8 +132,14 @@ function Copy-Replacing([string]$from, [string]$to) {
 # --- uninstall -----------------------------------------------------------------------
 
 if ($Uninstall) {
-    Write-Host "Removing the Content Credentials tab (per-user)..."
-    if ($PSCmdlet.ShouldProcess('HKCU registry', 'remove property sheet handler')) {
+    Write-Host "Removing the Content Credentials tab ($ScopeName)..."
+    $otherRoot = if ($AllUsers) { 'HKCU:\Software\Classes' } else { 'HKLM:\Software\Classes' }
+    if (Test-Path "$otherRoot\CLSID\$Clsid") {
+        $other = if ($AllUsers) { 'per-user' } else { 'per-machine' }
+        $flag  = if ($AllUsers) { 'without' } else { 'with' }
+        Write-Warning "A $other install is also registered; run again $flag -AllUsers to remove that one too."
+    }
+    if ($PSCmdlet.ShouldProcess("$ClassesRoot registry", 'remove property sheet handler')) {
         foreach ($ext in $Extensions) {
             $k = "$ClassesRoot\SystemFileAssociations\$ext\shellex\PropertySheetHandlers\$HandlerName"
             if (Test-Path $k) { Remove-Item -Path $k -Recurse -Force }
@@ -113,6 +155,7 @@ if ($Uninstall) {
         }
         $ck = "$ClassesRoot\CLSID\$Clsid"
         if (Test-Path $ck) { Remove-Item -Path $ck -Recurse -Force }
+        if ($AllUsers -and (Test-Path $ApprovedKey)) { Remove-ItemProperty -Path $ApprovedKey -Name $Clsid -ErrorAction SilentlyContinue }
         Invoke-ShellNotify
     }
     if ($RestartExplorer) { Restart-Explorer }
@@ -154,7 +197,7 @@ foreach ($f in @('c2paview.dll', 'c2paview-helper.exe')) {
 }
 if (-not (Test-Path (Join-Path $trustSrc 'c2pa-trust-list.pem'))) { Write-Warning "No trust lists found in $trustSrc - the tab will show 'signer not checked' for every file." }
 
-Write-Host "Installing the Content Credentials tab for the current user ($arch)"
+Write-Host "Installing the Content Credentials tab for $ScopeName ($arch)"
 Write-Host "  from: $SourceDir"
 Write-Host "  to:   $InstallDir"
 
@@ -193,7 +236,7 @@ if ((Test-Path $helper) -and (Test-Path $sample) -and -not $WhatIfPreference) {
     }
 }
 
-if ($PSCmdlet.ShouldProcess('HKCU registry', 'register property sheet handler')) {
+if ($PSCmdlet.ShouldProcess("$ClassesRoot registry", 'register property sheet handler')) {
     $dllPath = Join-Path $InstallDir 'c2paview.dll'
     $ck = "$ClassesRoot\CLSID\$Clsid"
     New-Item -Path $ck -Force | Out-Null
@@ -207,10 +250,17 @@ if ($PSCmdlet.ShouldProcess('HKCU registry', 'register property sheet handler'))
         New-Item -Path $k -Force | Out-Null
         Set-ItemProperty -Path $k -Name '(default)' -Value $Clsid
     }
+    if ($AllUsers) {
+        # Lets the handler load even where the EnforceShellExtensionSecurity policy is on.
+        New-Item -Path $ApprovedKey -Force | Out-Null
+        Set-ItemProperty -Path $ApprovedKey -Name $Clsid -Value $Description
+    }
     Invoke-ShellNotify
 }
 if ($RestartExplorer) { Restart-Explorer }
 
 Write-Host ''
 Write-Host 'Installed. Right-click an image, video, audio or PDF file > Properties > "Content Credentials" tab.'
-Write-Host "To remove:  powershell -ExecutionPolicy Bypass -File `"$InstallDir\Install-C2paViewTab.ps1`" -Uninstall -RestartExplorer"
+$scopeArg = if ($AllUsers) { ' -AllUsers' } else { '' }
+$howTo    = if ($AllUsers) { ' (from an elevated PowerShell)' } else { '' }
+Write-Host "To remove$howTo`:  powershell -ExecutionPolicy Bypass -File `"$InstallDir\Install-C2paViewTab.ps1`" -Uninstall$scopeArg -RestartExplorer"

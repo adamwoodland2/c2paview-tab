@@ -11,5 +11,5 @@
 #define IDC_COPY_JSON     1006
 #define IDC_FOOT          1007
 
-#define C2PAVIEW_VERSION_STR    "0.1.0.0"
-#define C2PAVIEW_VERSION_NUM    0,1,0,0
+#define C2PAVIEW_VERSION_STR    "0.1.1.0"
+#define C2PAVIEW_VERSION_NUM    0,1,1,0

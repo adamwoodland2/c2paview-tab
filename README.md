@@ -32,6 +32,20 @@ powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\C2PAView\Install-C2p
 registration itself is removed immediately. Both x64 and ARM64 Windows are supported; the
 installer picks the right binaries.
 
+### Per-machine (all users)
+
+From an **elevated** PowerShell (right-click > Run as administrator):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-C2paViewTab.ps1 -AllUsers
+powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\C2PAView\Install-C2paViewTab.ps1" -Uninstall -AllUsers -RestartExplorer
+```
+
+This installs to `%ProgramFiles%\C2PAView`, registers under `HKLM\Software\Classes`, and adds
+the handler to the shell-extensions "Approved" list, so it also works on PCs where the
+`EnforceShellExtensionSecurity` policy blocks per-user extensions. Run it without admin
+rights and the script stops before changing anything and prints the exact command to elevate.
+
 ## What the tab shows
 
 | State | Headline | Meaning |
@@ -97,17 +111,20 @@ and [Implementation Guidance 2.2](https://spec.c2pa.org/specifications/specifica
     kill-on-close so it dies with Explorer;
   - has a 45 s timeout and a 16 MB output cap; if it crashes, panics or times out the tab
     says so instead of failing silently.
-- **Per-user only.** Everything lives in `%LOCALAPPDATA%\C2PAView` and `HKCU\Software\Classes`.
-  Nothing system-wide is touched, no admin needed.
+- **Per-user by default.** Everything lives in `%LOCALAPPDATA%\C2PAView` and `HKCU\Software\Classes`;
+  nothing system-wide is touched and no admin is needed. `-AllUsers` is the opt-in per-machine
+  variant (Program Files + HKLM, elevated). The helper's scratch folder is always the user's
+  own `%LOCALAPPDATA%\C2PAView\tmp-low`.
 - **Registered per extension**, not for `*`, so the DLL is only loaded when you open
   Properties on a supported file type.
 - Static CRT, `/guard:cf`, `/CETCOMPAT` (x64), DEP/ASLR. No installer executable - a readable
   PowerShell script does the registration.
 
 Trade-off you should know: **the binaries are not code-signed.** The DLL is loaded by
-Explorer from your own profile; SmartScreen does not apply to shell extensions, but if your
+Explorer from your own profile; SmartScreen does not apply to shell extensions. If your
 organisation sets the `EnforceShellExtensionSecurity` policy, per-user shell extensions are
-blocked and this will not appear. Verify downloads against `SHA256SUMS.txt`.
+blocked - use `-AllUsers`, which registers the handler as approved. Verify downloads against
+`SHA256SUMS.txt`.
 
 ## Trust lists
 

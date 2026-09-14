@@ -18,6 +18,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <shlobj.h>
+#include <knownfolders.h>
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <commctrl.h>
@@ -163,9 +164,15 @@ static HANDLE MakeLowIntegrityToken()
     return hRestricted;
 }
 
-// Give the low-integrity helper somewhere it is allowed to write temp files.
-static std::wstring EnsureLowTempDir(const std::wstring& base)
+// Give the low-integrity helper somewhere it is allowed to write temp files. Always under
+// the user's LocalAppData: a per-machine install lives in Program Files, which is read-only.
+static std::wstring EnsureLowTempDir()
 {
+    PWSTR local = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &local))) return {};
+    std::wstring base = std::wstring(local) + L"\\C2PAView";
+    CoTaskMemFree(local);
+    CreateDirectoryW(base.c_str(), nullptr);
     std::wstring dir = base + L"\\tmp-low";
     CreateDirectoryW(dir.c_str(), nullptr);
     PSECURITY_DESCRIPTOR psd = nullptr;
@@ -232,8 +239,8 @@ static DWORD WINAPI WorkerThread(LPVOID param)
     std::wstring dir = ModuleDir();
     std::wstring exe = dir + L"\\c2paview-helper.exe";
     std::wstring cmd = L"\"" + exe + L"\" --trust-dir \"" + dir + L"\\trust\" -- \"" + LongPathSafe(job->file) + L"\"";
-    std::wstring lowTemp = EnsureLowTempDir(dir);
-    std::vector<wchar_t> env = BuildEnvBlock(lowTemp);
+    std::wstring lowTemp = EnsureLowTempDir();
+    std::vector<wchar_t> env = BuildEnvBlock(lowTemp.empty() ? dir : lowTemp);
 
     if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
         std::lock_guard<std::mutex> g(job->m);
