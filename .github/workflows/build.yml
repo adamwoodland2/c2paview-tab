@@ -45,10 +45,10 @@ jobs:
 
       - name: Test helper
         if: matrix.arch == 'x64'
-        run: cargo test --release --target ${{ matrix.triple }} -p c2paview-helper -- --nocapture
+        run: cargo test --locked --release --target ${{ matrix.triple }} -p c2paview-helper -- --nocapture
 
       - name: Build helper
-        run: cargo build --release --target ${{ matrix.triple }} -p c2paview-helper
+        run: cargo build --locked --release --target ${{ matrix.triple }} -p c2paview-helper
 
       - name: Build shell extension
         shell: pwsh
@@ -67,13 +67,6 @@ jobs:
           if (-not ($none -contains "STATE`tunsupported") -and -not ($none -contains "STATE`tnone")) { $none | Out-String | Write-Host; throw "expected unsupported/none for README.md" }
           Write-Host "Exports of c2paview.dll:"
           dumpbin /nologo /exports build/${{ matrix.arch }}/c2paview.dll
-
-      - name: Upload Cargo.lock (commit it to pin the dependency tree)
-        if: matrix.arch == 'x64'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cargo-lock
-          path: Cargo.lock
 
       - name: Stage binaries
         shell: pwsh

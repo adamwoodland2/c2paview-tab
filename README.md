@@ -152,7 +152,10 @@ powershell -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\C2PAView\Update-Trus
 ## Building
 
 Everything is built by GitHub Actions (`.github/workflows/build.yml`) on `windows-latest`
-for x64 and ARM64; tagging `vX.Y.Z` publishes a release with the zip and checksums.
+for x64 and ARM64; tagging `vX.Y.Z` publishes a release with the zip and checksums. Actions
+are pinned to commit SHAs, the workflow token is read-only except for the release step, and
+`Cargo.lock` is committed and enforced with `--locked`, so both architectures build the
+identical dependency tree.
 
 Locally you need Rust (1.96+) and Visual Studio Build Tools with the C++ workload
 (plus the ARM64 components for an ARM64 build):
