@@ -758,7 +758,7 @@ fn debris_scan(file: &Path) -> Vec<String> {
     let mut traces = Vec::new();
     let Ok(mut f) = fs::File::open(file) else { return traces };
     let mut buf = Vec::new();
-    if f.by_ref().take(DEBRIS_SCAN_CAP).read_to_end(&mut buf).is_err() { return traces; }
+    if Read::by_ref(&mut f).take(DEBRIS_SCAN_CAP).read_to_end(&mut buf).is_err() { return traces; }
     if find(&buf, b"dcterms:provenance").is_some() {
         traces.push("The file's XMP metadata still contains a dcterms:provenance pointer to a manifest that is no longer in the file.".into());
     }
